@@ -2,28 +2,25 @@
 
 ## Bootstrap code
 ```lua
--- bootstrap_only.lua
--- Minimal bootstrap: install plg.nvim if missing (no updates)
+-- plugin/plg-bootstrap.lua
+-- Minimal bootstrap: silently install plg.nvim if missing, then invoke sync
 
 local fn = vim.fn
-local api = vim.api
 
--- Determine install path for plg.nvim
+-- 3. Check/install in pack directory (autoload isn’t needed for Lua modules)
 local install_path = fn.stdpath('data') .. '/site/pack/plg/start/plg.nvim'
-
--- Clone if not already installed
 if fn.empty(fn.glob(install_path)) > 0 then
-  print('Installing plg.nvim...')
   fn.system({
-    'git',
-    'clone',
-    '--depth', '1',
+    'git', 'clone', '--depth', '1',
     'https://github.com/MihneaTs1/plg.nvim',
     install_path,
   })
 end
 
--- Add plg.nvim to runtimepath
+-- 4. Add to runtimepath
 vim.opt.rtp:prepend(install_path)
 
+-- 4. Call the manager to load specs and show UI as needed
+--    Place your plugin spec files under ~/.config/nvim/lua/plugins/*.lua
+require('plg').sync(fn.stdpath('config') .. '/lua/plugins')
 ```
