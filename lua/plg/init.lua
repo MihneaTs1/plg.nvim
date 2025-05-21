@@ -6,7 +6,7 @@ local fn, api, defer = vim.fn, vim.api, vim.defer_fn
 local M = { _plugins = {} }
 local root = fn.stdpath('data') .. '/site/pack/plg'
 
--- Simple floating window UI
+-- Simple floating-window UI
 local ui = {}
 function ui.open(count)
   ui.total       = count
@@ -44,6 +44,9 @@ if fn.empty(fn.glob(self_path)) > 0 then
   fn.system({ 'git', 'clone', '--depth', '1', 'https://github.com/MihneaTs1/plg.nvim', self_path })
 end
 vim.opt.rtp:prepend(self_path)
+
+-- 1a. Register plg.nvim for internal update checks
+M._plugins['MihneaTs1/plg.nvim'] = { repo = 'MihneaTs1/plg.nvim', config = nil }
 
 -- 2. Define plugin specification
 function M.use(repo, opts)
