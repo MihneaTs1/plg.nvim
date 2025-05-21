@@ -1,46 +1,36 @@
 -- lua/plg/init.lua
--- A minimal, single-file Neovim plugin manager with self-bootstrap, install, and update
+-- A minimal, single-file Neovim plugin manager with self-bootstrap, install, and update (lazy notifications)
 
 local uv = vim.loop
 local fn, api, defer = vim.fn, vim.api, vim.defer_fn
 local M = { _plugins = {} }
 local root = fn.stdpath('data') .. '/site/pack/plg'
 
--- Simple floating-window UI
+-- Notification-based UI (no floating window)
 local ui = {}
+local notify = vim.notify or function(msg, level)
+  api.nvim_echo({{msg}}, true, {})
+end
 function ui.open(count)
-  ui.total       = count
-  ui.done_count  = 0
-  ui.buf = api.nvim_create_buf(false, true)
-  ui.win = api.nvim_open_win(ui.buf, false, {
-    relative = 'editor', width = 50, height = 10,
-    row = math.floor(vim.o.lines/2 - 5), col = math.floor(vim.o.columns/2 - 25),
-    style = 'minimal', border = 'rounded',
-  })
-  api.nvim_buf_set_lines(ui.buf, 0, -1, false, { 'plg.nvim: processing plugins...' })
+  ui.total = count
+  ui.done_count = 0
+  notify(('plg.nvim: processing %d plugins...'):format(count), vim.log.levels.INFO)
 end
 function ui.log(msg)
-  if ui.buf and api.nvim_buf_is_valid(ui.buf) then
-    local lines = api.nvim_buf_get_lines(ui.buf, 0, -1, false)
-    table.insert(lines, msg)
-    api.nvim_buf_set_lines(ui.buf, 0, -1, false, lines)
-  end
+  notify(msg, vim.log.levels.INFO)
 end
 function ui.mark_done(name, ok)
   ui.done_count = ui.done_count + 1
-  ui.log(name .. (ok and ' ✔️' or ' ❌'))
+  notify(name .. (ok and ' ✔️' or ' ❌'), vim.log.levels.INFO)
   if ui.done_count >= ui.total then
-    ui.log('All done.')
-    defer(function()
-      if api.nvim_win_is_valid(ui.win) then api.nvim_win_close(ui.win, true) end
-    end, 0)
+    notify('plg.nvim: All done.', vim.log.levels.INFO)
   end
 end
 
 -- 1. Self-bootstrap: clone or load plg.nvim itself
 local self_path = root .. '/start/plg.nvim'
 if fn.empty(fn.glob(self_path)) > 0 then
-  print('Installing plg.nvim...')
+  notify('Installing plg.nvim...', vim.log.levels.INFO)
   fn.system({ 'git', 'clone', '--depth', '1', 'https://github.com/MihneaTs1/plg.nvim', self_path })
 end
 vim.opt.rtp:prepend(self_path)
@@ -79,16 +69,15 @@ end
 -- 3 & 4. Determine missing vs outdated and perform operations
 local function process_plugins()
   local install_list, update_list = {}, {}
-  for repo, data in pairs(M._plugins) do
+  for repo in pairs(M._plugins) do
     local name = repo:match('.*/(.*)')
     local path = root .. '/start/' .. name
     local url = 'https://github.com/' .. repo .. '.git'
 
     if fn.isdirectory(path) == 0 then
-      -- Not installed -> schedule install
       table.insert(install_list, { repo = repo, path = path, name = name, url = url })
     else
-      -- Already installed: check remote HEAD
+      -- Check remote HEAD only if installed
       local local_sha = fn.systemlist({ 'git', '-C', path, 'rev-parse', 'HEAD' })[1]
       local remote_info = fn.systemlist({ 'git', '-C', path, 'ls-remote', 'origin', 'HEAD' })[1]
       local remote_sha = remote_info and remote_info:match('^([a-f0-9]+)')
@@ -98,11 +87,9 @@ local function process_plugins()
     end
   end
 
-  -- No installs or updates -> silent exit
   local total = #install_list + #update_list
   if total == 0 then return end
 
-  -- Show UI for all tasks
   ui.open(total)
 
   -- Perform installs
@@ -116,7 +103,7 @@ local function process_plugins()
     end)
   end
 
-  -- Perform updates (including plg.nvim)
+  -- Perform updates
   for _, p in ipairs(update_list) do
     ui.log('Updating ' .. p.name .. '...')
     git_async('git', { '-C', p.path, 'pull', '--ff-only' }, p.path, p.name, function()
