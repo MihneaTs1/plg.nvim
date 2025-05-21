@@ -1,5 +1,6 @@
 -- lua/plg/init.lua
 -- A minimal, single-file Neovim plugin manager with self-bootstrap, install, and update
+-- test
 
 local uv = vim.loop
 local fn, api, defer = vim.fn, vim.api, vim.defer_fn
