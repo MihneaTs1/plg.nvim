@@ -1,6 +1,5 @@
 -- lua/plg/init.lua
 -- A minimal, single-file Neovim plugin manager with self-bootstrap, install, and update
--- test
 
 local uv = vim.loop
 local fn, api, defer = vim.fn, vim.api, vim.defer_fn
@@ -10,9 +9,9 @@ local root = fn.stdpath('data') .. '/site/pack/plg'
 -- Simple floating-window UI
 local ui = {}
 function ui.open(count)
-  ui.total       = count
-  ui.done_count  = 0
-  ui.buf = api.nvim_create_buf(false, true)
+  ui.total      = count
+  ui.done_count = 0
+  ui.buf        = api.nvim_create_buf(false, true)
   ui.win = api.nvim_open_win(ui.buf, false, {
     relative = 'editor', width = 50, height = 10,
     row = math.floor(vim.o.lines/2 - 5), col = math.floor(vim.o.columns/2 - 25),
@@ -38,7 +37,7 @@ function ui.mark_done(name, ok)
   end
 end
 
--- 1. Self-bootstrap: clone or load plg.nvim itself
+-- 1. Self-bootstrap: clone or load plg.nvim
 local self_path = root .. '/start/plg.nvim'
 if fn.empty(fn.glob(self_path)) > 0 then
   print('Installing plg.nvim...')
@@ -80,32 +79,32 @@ end
 -- 3 & 4. Determine missing vs outdated and perform operations
 local function process_plugins()
   local install_list, update_list = {}, {}
-  for repo, data in pairs(M._plugins) do
+  for repo in pairs(M._plugins) do
     local name = repo:match('.*/(.*)')
     local path = root .. '/start/' .. name
-    local url = 'https://github.com/' .. repo .. '.git'
+    local url  = 'https://github.com/' .. repo .. '.git'
 
     if fn.isdirectory(path) == 0 then
-      -- Not installed -> schedule install
       table.insert(install_list, { repo = repo, path = path, name = name, url = url })
     else
-      -- Already installed: defer remote‐HEAD check until :PlgUpdate
-      -- (for now we assume up-to-date, so no blocking calls here)
-      -- update_list will be populated later on-demand
+      -- check remote HEAD
+      local local_sha = fn.systemlist({ 'git','-C',path,'rev-parse','HEAD' })[1]
+      local info      = fn.systemlist({ 'git','-C',path,'ls-remote','origin','HEAD' })[1]
+      local remote_sha= info and info:match('^([a-f0-9]+)')
+      if local_sha and remote_sha and local_sha ~= remote_sha then
+        table.insert(update_list, { repo = repo, path = path, name = name, url = url })
+      end
     end
   end
 
-  -- No installs or updates -> silent exit
   local total = #install_list + #update_list
   if total == 0 then return end
 
-  -- Show UI for all tasks
   ui.open(total)
 
-  -- Perform installs
   for _, p in ipairs(install_list) do
     ui.log('Installing ' .. p.name .. '...')
-    git_async('git', { 'clone', '--depth', '1', p.url, p.path }, nil, p.name, function()
+    git_async('git', { 'clone','--depth','1',p.url,p.path }, nil, p.name, function()
       vim.opt.rtp:append(p.path)
       if type(M._plugins[p.repo].config) == 'function' then
         defer(function() pcall(M._plugins[p.repo].config) end, 10)
@@ -113,10 +112,9 @@ local function process_plugins()
     end)
   end
 
-  -- Perform updates (including plg.nvim)
   for _, p in ipairs(update_list) do
     ui.log('Updating ' .. p.name .. '...')
-    git_async('git', { '-C', p.path, 'pull', '--ff-only' }, p.path, p.name, function()
+    git_async('git', { '-C',p.path,'pull','--ff-only' }, p.path, p.name, function()
       vim.opt.rtp:append(p.path)
     end)
   end
@@ -136,10 +134,46 @@ local function load_specs(specs_path)
   end
 end
 
--- Public interface: sync plugins
+-- Public interface: sync plugins (install + update)
 function M.sync(specs_path)
   load_specs(specs_path)
   process_plugins()
 end
+
+-- Update-only command (UI box for updates)
+function M.update()
+  local updates = {}
+  for repo in pairs(M._plugins) do
+    local name = repo:match('.*/(.*)')
+    local path = root .. '/start/' .. name
+    if fn.isdirectory(path) == 1 then
+      local local_sha = fn.systemlist({ 'git','-C',path,'rev-parse','HEAD' })[1]
+      local info      = fn.systemlist({ 'git','-C',path,'ls-remote','origin','HEAD' })[1]
+      local remote_sha= info and info:match('^([a-f0-9]+)')
+      if local_sha and remote_sha and local_sha ~= remote_sha then
+        table.insert(updates, { repo = repo, path = path, name = name })
+      end
+    end
+  end
+
+  if #updates == 0 then return end
+  ui.open(#updates)
+  for _, p in ipairs(updates) do
+    ui.log('Updating ' .. p.name .. '...')
+    git_async('git', { '-C',p.path,'pull','--ff-only' }, p.path, p.name)
+  end
+end
+
+-- User commands
+api.nvim_create_user_command('PlgSync', function(opts) M.sync(opts.args) end, { nargs = 1 })
+api.nvim_create_user_command('PlgUpdate', M.update, {})
+api.nvim_create_user_command('PlgList', function() end, {}) -- implement as needed
+api.nvim_create_user_command('PlgClean', function() end, {})
+
+-- Auto-check and apply updates after startup
+vim.schedule(function()
+  -- assumes specs were already loaded and installed via Sync
+  M.update()
+end)
 
 return M
