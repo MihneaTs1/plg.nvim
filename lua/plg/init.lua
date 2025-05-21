@@ -63,10 +63,15 @@ end
 
 -- Internal: run git commands asynchronously
 local function git_async(cmd, args, cwd, name, cb)
-  local stdout, stderr = uv.new_pipe(false), uv.new_pipe(false)
+  local stdout = uv.new_pipe(false)
+  local stderr = uv.new_pipe(false)
   local handle
-  handle = uv.spawn(cmd, { args = args, stdio = { nil, stdout, stderr }, cwd = cwd }, function(code)
-    stdout:close(); stderr:close(); handle:close();
+  handle = uv.spawn(cmd, {
+    args   = args,
+    stdio  = { nil, stdout, stderr },
+    cwd    = cwd,
+  }, function(code)
+    stdout:close(); stderr:close(); handle:close()
     vim.schedule(function()
       ui.mark_done(name, code == 0)
       if code == 0 and cb then cb() end
@@ -78,45 +83,61 @@ end
 
 -- 3 & 4. Determine missing vs outdated and perform operations
 local function process_plugins()
-  local install_list, update_list = {}, {}
-  for repo in pairs(M._plugins) do
+  local install_list, check_list = {}, {}
+  for repo,data in pairs(M._plugins) do
     local name = repo:match('.*/(.*)')
     local path = root .. '/start/' .. name
     local url  = 'https://github.com/' .. repo .. '.git'
 
     if fn.isdirectory(path) == 0 then
-      table.insert(install_list, { repo = repo, path = path, name = name, url = url })
+      table.insert(install_list, { repo=repo, name=name, path=path, url=url })
     else
-      -- check remote HEAD
-      local local_sha = fn.systemlist({ 'git','-C',path,'rev-parse','HEAD' })[1]
-      local info      = fn.systemlist({ 'git','-C',path,'ls-remote','origin','HEAD' })[1]
-      local remote_sha= info and info:match('^([a-f0-9]+)')
-      if local_sha and remote_sha and local_sha ~= remote_sha then
-        table.insert(update_list, { repo = repo, path = path, name = name, url = url })
-      end
+      table.insert(check_list,   { repo=repo, name=name, path=path })
     end
   end
 
-  local total = #install_list + #update_list
-  if total == 0 then return end
+  -- nothing new at all?
+  if #install_list + #check_list == 0 then
+    return
+  end
 
-  ui.open(total)
+  -- open UI for initial checks + installs
+  ui.open(#install_list + #check_list)
 
-  for _, p in ipairs(install_list) do
-    ui.log('Installing ' .. p.name .. '...')
-    git_async('git', { 'clone','--depth','1',p.url,p.path }, nil, p.name, function()
+  -- 1) schedule all installs
+  for _,p in ipairs(install_list) do
+    ui.log('Installing ' .. p.name .. '…')
+    git_async('git', { 'clone', '--depth', '1', p.url, p.path }, nil, p.name, function()
       vim.opt.rtp:append(p.path)
-      if type(M._plugins[p.repo].config) == 'function' then
-        defer(function() pcall(M._plugins[p.repo].config) end, 10)
+      local cfg = M._plugins[p.repo].config
+      if type(cfg) == 'function' then
+        defer(function() pcall(cfg) end, 10)
       end
     end)
   end
 
-  for _, p in ipairs(update_list) do
-    ui.log('Updating ' .. p.name .. '...')
-    git_async('git', { '-C',p.path,'pull','--ff-only' }, p.path, p.name, function()
-      vim.opt.rtp:append(p.path)
-    end)
+  -- 2) schedule all remote-HEAD checks
+  for _,p in ipairs(check_list) do
+    ui.log('Checking ' .. p.name .. '…')
+    -- spawn ls-remote
+    uv.spawn('git', {
+      args  = { '-C', p.path, 'ls-remote', 'origin', 'HEAD' },
+      stdio = { nil, uv.new_pipe(false), uv.new_pipe(false) },
+    }, vim.schedule_wrap(function(code)
+      -- once ls-remote exits, compare SHAs synchronously (fast disk/low-latency)
+      local local_sha  = fn.systemlist({ 'git', '-C', p.path, 'rev-parse', 'HEAD' })[1]
+      local remote_sha = fn.systemlist({ 'git', '-C', p.path, 'ls-remote', 'origin', 'HEAD' })[1]:match('^([a-f0-9]+)')
+      if local_sha and remote_sha and local_sha ~= remote_sha then
+        -- bump UI.total dynamically
+        ui.total = ui.total + 1
+        ui.log('Updating ' .. p.name .. '…')
+        git_async('git', { '-C', p.path, 'pull', '--ff-only' }, p.path, p.name, function()
+          vim.opt.rtp:append(p.path)
+        end)
+      end
+      -- mark the check itself as done
+      ui.mark_done(p.name, true)
+    end))
   end
 end
 
