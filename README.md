@@ -2,30 +2,26 @@
 
 ## Bootstrap code
 ```lua
-local function bootstrap_plg(specs_path)
-  local install_path = vim.fn.stdpath("data") .. "/site/pack/plg/start/plg.nvim"
-  local update_stamp = install_path .. "/.plg-last-update"
+function bootstrap_plg(specs_path)
+  local plugpath = vim.fn.stdpath("data") .. "/site/pack/plg/start/plg.nvim"
 
-  -- Helper: check file age
-  local function needs_update()
-    local stat = vim.loop.fs_stat(update_stamp)
-    if not stat then return true end
-    local age = os.time() - stat.mtime.sec
-    return age > 86400 -- > 1 day
-  end
-
-  -- Clone or update plugin manager
-  if vim.fn.empty(vim.fn.glob(install_path)) > 0 then
+  -- clone plg.nvim if missing
+  if vim.fn.empty(vim.fn.glob(plugpath)) > 0 then
     print("Installing plg.nvim...")
-    vim.fn.system({ "git", "clone", "--depth", "1", "https://github.com/MihneaTs1/plg.nvim", install_path })
-    vim.fn.writefile({ os.date() }, update_stamp) -- mark fresh install
-  elseif needs_update() then
-    print("Updating plg.nvim...")
-    vim.fn.system({ "git", "-C", install_path, "pull", "--ff-only" })
-    vim.fn.writefile({ os.date() }, update_stamp)
+    vim.fn.system({ "git", "clone", "--depth", "1", "https://github.com/MihneaTs1/plg.nvim", plugpath })
+  else
+    -- only update if local HEAD != remote HEAD
+    local local_sha = vim.fn.systemlist({ "git", "-C", plugpath, "rev-parse", "HEAD" })[1]
+    local remote_sha = vim.fn.systemlist({ "git", "-C", plugpath, "ls-remote", "origin", "HEAD" })[1]
+    remote_sha = remote_sha and remote_sha:match("^([a-f0-9]+)")
+
+    if local_sha and remote_sha and local_sha ~= remote_sha then
+      print("Updating plg.nvim...")
+      vim.fn.system({ "git", "-C", plugpath, "pull", "--ff-only" })
+    end
   end
 
-  vim.opt.rtp:prepend(install_path)
+  vim.opt.rtp:prepend(plugpath)
 
   local ok, plg = pcall(require, "plg")
   if not ok then
@@ -33,7 +29,6 @@ local function bootstrap_plg(specs_path)
     return
   end
 
-  -- Plugin loader
   local function load_spec_file(file)
     local chunk, err = loadfile(file)
     if not chunk then
@@ -58,7 +53,6 @@ local function bootstrap_plg(specs_path)
     end
   end
 
-  -- Load from file or directory
   if vim.fn.isdirectory(specs_path) == 1 then
     local files = vim.fn.glob(specs_path .. "/*.lua", true, true)
     for _, file in ipairs(files) do
