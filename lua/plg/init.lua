@@ -9,7 +9,8 @@ local root = fn.stdpath('data') .. '/site/pack/plg'
 -- Simple floating-window UI
 local ui = {}
 function ui.open(count)
-  ui.total, ui.done = count, 0
+  ui.total       = count
+  ui.done_count  = 0
   ui.buf = api.nvim_create_buf(false, true)
   ui.win = api.nvim_open_win(ui.buf, false, {
     relative = 'editor', width = 50, height = 10,
@@ -25,10 +26,10 @@ function ui.log(msg)
     api.nvim_buf_set_lines(ui.buf, 0, -1, false, lines)
   end
 end
-function ui.done(name, ok)
-  ui.done = ui.done + 1
+function ui.mark_done(name, ok)
+  ui.done_count = ui.done_count + 1
   ui.log(name .. (ok and ' ✔️' or ' ❌'))
-  if ui.done >= ui.total then
+  if ui.done_count >= ui.total then
     ui.log('All done.')
     defer(function()
       if api.nvim_win_is_valid(ui.win) then api.nvim_win_close(ui.win, true) end
