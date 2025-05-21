@@ -33,7 +33,7 @@ function ui.mark_done(name, ok)
     ui.log('All done.')
     defer(function()
       if api.nvim_win_is_valid(ui.win) then api.nvim_win_close(ui.win, true) end
-    end, 500)
+    end, 0)
   end
 end
 
