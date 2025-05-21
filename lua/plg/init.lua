@@ -88,13 +88,9 @@ local function process_plugins()
       -- Not installed -> schedule install
       table.insert(install_list, { repo = repo, path = path, name = name, url = url })
     else
-      -- Already installed: check remote HEAD
-      local local_sha = fn.systemlist({ 'git', '-C', path, 'rev-parse', 'HEAD' })[1]
-      local remote_info = fn.systemlist({ 'git', '-C', path, 'ls-remote', 'origin', 'HEAD' })[1]
-      local remote_sha = remote_info and remote_info:match('^([a-f0-9]+)')
-      if local_sha and remote_sha and local_sha ~= remote_sha then
-        table.insert(update_list, { repo = repo, path = path, name = name, url = url })
-      end
+      -- Already installed: defer remote‐HEAD check until :PlgUpdate
+      -- (for now we assume up-to-date, so no blocking calls here)
+      -- update_list will be populated later on-demand
     end
   end
 
