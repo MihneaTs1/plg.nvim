@@ -33,7 +33,7 @@ function ui.mark_done(name, ok)
     ui.log('All done.')
     defer(function()
       if api.nvim_win_is_valid(ui.win) then api.nvim_win_close(ui.win, true) end
-    end, 0)
+    end, 500)
   end
 end
 
@@ -76,7 +76,7 @@ local function git_async(cmd, args, cwd, name, cb)
   stderr:read_start(function() end)
 end
 
--- 3 & 4. Determine missing vs outdated and perform operations
+-- 3 & 4. Determine missing vs outdated, then show UI and process
 local function process_plugins()
   local install_list, update_list = {}, {}
   for repo, data in pairs(M._plugins) do
@@ -90,29 +90,30 @@ local function process_plugins()
     end
   end
 
+  -- If nothing to do, exit silently
+  local total = #install_list + #update_list
+  if total == 0 then return end
+
+  -- Show UI for all operations
+  ui.open(total)
+
   -- Install missing
-  if #install_list > 0 then
-    ui.open(#install_list)
-    for _, p in ipairs(install_list) do
-      ui.log('Installing ' .. p.name .. '...')
-      git_async('git', { 'clone', '--depth', '1', p.url, p.path }, nil, p.name, function()
-        vim.opt.rtp:append(p.path)
-        if type(M._plugins[p.repo].config) == 'function' then
-          defer(function() pcall(M._plugins[p.repo].config) end, 10)
-        end
-      end)
-    end
+  for _, p in ipairs(install_list) do
+    ui.log('Installing ' .. p.name .. '...')
+    git_async('git', { 'clone', '--depth', '1', p.url, p.path }, nil, p.name, function()
+      vim.opt.rtp:append(p.path)
+      if type(M._plugins[p.repo].config) == 'function' then
+        defer(function() pcall(M._plugins[p.repo].config) end, 10)
+      end
+    end)
   end
 
   -- Update outdated (including self)
-  if #update_list > 0 then
-    ui.open(#update_list)
-    for _, p in ipairs(update_list) do
-      ui.log('Updating ' .. p.name .. '...')
-      git_async('git', { '-C', p.path, 'pull', '--ff-only' }, p.path, p.name, function()
-        vim.opt.rtp:append(p.path)
-      end)
-    end
+  for _, p in ipairs(update_list) do
+    ui.log('Updating ' .. p.name .. '...')
+    git_async('git', { '-C', p.path, 'pull', '--ff-only' }, p.path, p.name, function()
+      vim.opt.rtp:append(p.path)
+    end)
   end
 end
 
