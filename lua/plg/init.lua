@@ -6,7 +6,7 @@ local fn, api, defer = vim.fn, vim.api, vim.defer_fn
 local M = { _plugins = {} }
 local root = fn.stdpath('data') .. '/site/pack/plg'
 
--- Simple floating window UI
+-- Simple floating-window UI
 local ui = {}
 function ui.open(count)
   ui.total       = count
