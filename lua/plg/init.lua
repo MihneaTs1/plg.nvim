@@ -51,50 +51,54 @@ local function run_git_async(cmd, args, cwd, name, on_success)
 end
 
 function plg.install()
-    local repos = vim.tbl_keys(plg._plugins)
-    if #repos == 0 then return end
+  local repos = vim.tbl_keys(plg._plugins)
+  if #repos == 0 then return end
 
-    local needs_action = {}
+  local new_plugins = {}
+  local already_installed = {}
 
-    for _, repo in ipairs(repos) do
-        local name = repo:match(".*/(.*)")
-        local path = PlgRoot .. "/" .. name
-        local is_installed = vim.fn.isdirectory(path) == 1 and vim.fn.isdirectory(path .. "/.git") == 1
-        if not is_installed then
-            table.insert(needs_action, { repo = repo, type = "install" })
-        else
-            table.insert(needs_action, { repo = repo, type = "update" })
-        end
+  for _, repo in ipairs(repos) do
+    local name = repo:match(".*/(.*)")
+    local path = PlgRoot .. "/" .. name
+    local is_installed = vim.fn.isdirectory(path) == 1 and vim.fn.isdirectory(path .. "/.git") == 1
+    if not is_installed then
+      table.insert(new_plugins, { repo = repo, path = path, name = name })
+    else
+      table.insert(already_installed, { repo = repo, path = path, name = name })
     end
+  end
 
-    if #needs_action == 0 then return end
-    ui.open(#needs_action)
+  -- Only show UI window if installing new plugins
+  if #new_plugins > 0 then
+    require("plg.ui").open(#repos)
+  end
 
-    for _, item in ipairs(needs_action) do
-        local repo = item.repo
-        local name = repo:match(".*/(.*)")
-        local path = PlgRoot .. "/" .. name
-
-        local function finish()
-            vim.opt.runtimepath:append(path)
-            plg._plugins[repo].done = true
-            local cfg = plg._plugins[repo].config
-            if type(cfg) == "function" then
-                vim.defer_fn(function()
-                    pcall(cfg)
-                end, 10)
-            end
-        end
-
-        if item.type == "install" then
-            local url = "https://github.com/" .. repo .. ".git"
-            ui.log("Installing " .. name .. "...")
-            run_git_async("git", { "clone", "--depth", "1", url, path }, nil, name, finish)
-        else
-            ui.log("Updating " .. name .. "...")
-            run_git_async("git", { "pull", "--ff-only" }, path, name, finish)
-        end
+  local function finish(repo, path)
+    vim.opt.runtimepath:append(path)
+    plg._plugins[repo].done = true
+    local cfg = plg._plugins[repo].config
+    if type(cfg) == "function" then
+      vim.defer_fn(function()
+        pcall(cfg)
+      end, 10)
     end
+  end
+
+  -- Install new plugins (show UI)
+  for _, item in ipairs(new_plugins) do
+    local url = "https://github.com/" .. item.repo .. ".git"
+    require("plg.ui").log("Installing " .. item.name .. "...")
+    run_git_async("git", { "clone", "--depth", "1", url, item.path }, nil, item.name, function()
+      finish(item.repo, item.path)
+    end)
+  end
+
+  -- Update existing plugins (silent)
+  for _, item in ipairs(already_installed) do
+    run_git_async("git", { "-C", item.path, "pull", "--ff-only" }, item.path, item.name, function()
+      finish(item.repo, item.path)
+    end)
+  end
 end
 
 -- Add UI commands
