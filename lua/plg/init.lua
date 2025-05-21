@@ -76,28 +76,36 @@ local function git_async(cmd, args, cwd, name, cb)
   stderr:read_start(function() end)
 end
 
--- 3 & 4. Determine missing vs outdated, then show UI and process
+-- 3 & 4. Determine missing vs outdated and perform operations
 local function process_plugins()
   local install_list, update_list = {}, {}
   for repo, data in pairs(M._plugins) do
     local name = repo:match('.*/(.*)')
     local path = root .. '/start/' .. name
     local url = 'https://github.com/' .. repo .. '.git'
+
     if fn.isdirectory(path) == 0 then
+      -- Not installed -> schedule install
       table.insert(install_list, { repo = repo, path = path, name = name, url = url })
     else
-      table.insert(update_list, { repo = repo, path = path, name = name, url = url })
+      -- Already installed: check remote HEAD
+      local local_sha = fn.systemlist({ 'git', '-C', path, 'rev-parse', 'HEAD' })[1]
+      local remote_info = fn.systemlist({ 'git', '-C', path, 'ls-remote', 'origin', 'HEAD' })[1]
+      local remote_sha = remote_info and remote_info:match('^([a-f0-9]+)')
+      if local_sha and remote_sha and local_sha ~= remote_sha then
+        table.insert(update_list, { repo = repo, path = path, name = name, url = url })
+      end
     end
   end
 
-  -- If nothing to do, exit silently
+  -- No installs or updates -> silent exit
   local total = #install_list + #update_list
   if total == 0 then return end
 
-  -- Show UI for all operations
+  -- Show UI for all tasks
   ui.open(total)
 
-  -- Install missing
+  -- Perform installs
   for _, p in ipairs(install_list) do
     ui.log('Installing ' .. p.name .. '...')
     git_async('git', { 'clone', '--depth', '1', p.url, p.path }, nil, p.name, function()
@@ -108,7 +116,7 @@ local function process_plugins()
     end)
   end
 
-  -- Update outdated (including self)
+  -- Perform updates (including plg.nvim)
   for _, p in ipairs(update_list) do
     ui.log('Updating ' .. p.name .. '...')
     git_async('git', { '-C', p.path, 'pull', '--ff-only' }, p.path, p.name, function()
@@ -117,7 +125,7 @@ local function process_plugins()
   end
 end
 
--- 3. Load user spec files
+-- 5. Load user spec files
 local function load_specs(specs_path)
   local files = fn.isdirectory(specs_path) == 1 and fn.glob(specs_path .. '/*.lua', true, true) or { specs_path }
   for _, f in ipairs(files) do
