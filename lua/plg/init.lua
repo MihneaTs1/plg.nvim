@@ -65,7 +65,7 @@ local function git_async(cmd, args, cwd, name, cb)
   handle = uv.spawn(cmd, { args = args, stdio = { nil, stdout, stderr }, cwd = cwd }, function(code)
     stdout:close(); stderr:close(); handle:close();
     vim.schedule(function()
-      ui.done(name, code == 0)
+      ui.mark_done(name, code == 0)
       if code == 0 and cb then cb() end
     end)
   end)
