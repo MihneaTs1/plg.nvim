@@ -1,135 +1,147 @@
 -- lua/plg/init.lua
--- A minimal, single-file Neovim plugin manager with self-bootstrap, install, and update (lazy notifications)
+-- A minimal, async Neovim plugin manager: auto-install, notify updates, and commands with simple UI
 
 local uv = vim.loop
-local fn, api, defer = vim.fn, vim.api, vim.defer_fn
+local fn, api, schedule, notify = vim.fn, vim.api, vim.schedule, vim.notify
 local M = { _plugins = {} }
-local root = fn.stdpath('data') .. '/site/pack/plg'
+local data_path = fn.stdpath('data') .. '/site/pack/plg'
 
--- Notification-based UI (no floating window)
-local ui = {}
-local notify = vim.notify or function(msg, level)
-  api.nvim_echo({{msg}}, true, {})
-end
-function ui.open(count)
-  ui.total = count
-  ui.done_count = 0
-  notify(('plg.nvim: processing %d plugins...'):format(count), vim.log.levels.INFO)
-end
-function ui.log(msg)
-  notify(msg, vim.log.levels.INFO)
-end
-function ui.mark_done(name, ok)
-  ui.done_count = ui.done_count + 1
-  notify(name .. (ok and ' ✔️' or ' ❌'), vim.log.levels.INFO)
-  if ui.done_count >= ui.total then
-    notify('plg.nvim: All done.', vim.log.levels.INFO)
+-- Bootstrap: clone plg if missing
+local function bootstrap()
+  local path = data_path .. '/start/plg.nvim'
+  if fn.empty(fn.glob(path)) > 0 then
+    notify('Installing plg.nvim...', vim.log.levels.INFO)
+    fn.system({ 'git', 'clone', '--depth', '1', 'https://github.com/MihneaTs1/plg.nvim', path })
   end
+  vim.opt.rtp:prepend(path)
 end
 
--- 1. Self-bootstrap: clone or load plg.nvim itself
-local self_path = root .. '/start/plg.nvim'
-if fn.empty(fn.glob(self_path)) > 0 then
-  notify('Installing plg.nvim...', vim.log.levels.INFO)
-  fn.system({ 'git', 'clone', '--depth', '1', 'https://github.com/MihneaTs1/plg.nvim', self_path })
-end
-vim.opt.rtp:prepend(self_path)
-
--- 1a. Register plg.nvim for internal update checks
-M._plugins['MihneaTs1/plg.nvim'] = { repo = 'MihneaTs1/plg.nvim', config = nil }
-
--- 2. Define plugin specification
+-- Register a plugin spec
 function M.use(repo, opts)
   opts = opts or {}
   if not M._plugins[repo] then
-    M._plugins[repo] = { repo = repo, config = opts.config }
-    if opts.dependencies then
-      for _, d in ipairs(opts.dependencies) do
-        if type(d) == 'string' then M.use(d) else M.use(d[1], d) end
-      end
+    M._plugins[repo] = { repo = repo, config = opts.config, deps = opts.dependencies or {} }
+    for _, d in ipairs(opts.dependencies or {}) do
+      if type(d) == 'string' then M.use(d)
+      elseif type(d) == 'table' then M.use(d[1], d) end
     end
   end
 end
 
--- Internal: run git commands asynchronously
-local function git_async(cmd, args, cwd, name, cb)
-  local stdout, stderr = uv.new_pipe(false), uv.new_pipe(false)
-  local handle
-  handle = uv.spawn(cmd, { args = args, stdio = { nil, stdout, stderr }, cwd = cwd }, function(code)
-    stdout:close(); stderr:close(); handle:close();
-    vim.schedule(function()
-      ui.mark_done(name, code == 0)
-      if code == 0 and cb then cb() end
-    end)
-  end)
-  stdout:read_start(function() end)
-  stderr:read_start(function() end)
-end
-
--- 3 & 4. Determine missing vs outdated and perform operations
-local function process_plugins()
-  local install_list, update_list = {}, {}
-  for repo in pairs(M._plugins) do
-    local name = repo:match('.*/(.*)')
-    local path = root .. '/start/' .. name
-    local url = 'https://github.com/' .. repo .. '.git'
-
-    if fn.isdirectory(path) == 0 then
-      table.insert(install_list, { repo = repo, path = path, name = name, url = url })
-    else
-      -- Check remote HEAD only if installed
-      local local_sha = fn.systemlist({ 'git', '-C', path, 'rev-parse', 'HEAD' })[1]
-      local remote_info = fn.systemlist({ 'git', '-C', path, 'ls-remote', 'origin', 'HEAD' })[1]
-      local remote_sha = remote_info and remote_info:match('^([a-f0-9]+)')
-      if local_sha and remote_sha and local_sha ~= remote_sha then
-        table.insert(update_list, { repo = repo, path = path, name = name, url = url })
-      end
-    end
+-- Load spec files
+local function load_specs(specs)
+  local paths = {}
+  if fn.isdirectory(specs) == 1 then
+    for _, f in ipairs(fn.glob(specs .. '/*.lua', true, true)) do table.insert(paths, f) end
+  else
+    table.insert(paths, specs)
   end
-
-  local total = #install_list + #update_list
-  if total == 0 then return end
-
-  ui.open(total)
-
-  -- Perform installs
-  for _, p in ipairs(install_list) do
-    ui.log('Installing ' .. p.name .. '...')
-    git_async('git', { 'clone', '--depth', '1', p.url, p.path }, nil, p.name, function()
-      vim.opt.rtp:append(p.path)
-      if type(M._plugins[p.repo].config) == 'function' then
-        defer(function() pcall(M._plugins[p.repo].config) end, 10)
-      end
-    end)
-  end
-
-  -- Perform updates
-  for _, p in ipairs(update_list) do
-    ui.log('Updating ' .. p.name .. '...')
-    git_async('git', { '-C', p.path, 'pull', '--ff-only' }, p.path, p.name, function()
-      vim.opt.rtp:append(p.path)
-    end)
-  end
-end
-
--- 5. Load user spec files
-local function load_specs(specs_path)
-  local files = fn.isdirectory(specs_path) == 1 and fn.glob(specs_path .. '/*.lua', true, true) or { specs_path }
-  for _, f in ipairs(files) do
+  for _, f in ipairs(paths) do
     local ok, specs = pcall(assert(loadfile(f)))
-    if not ok then api.nvim_err_writeln('plg.nvim: error loading ' .. f .. ': ' .. specs) end
-    if type(specs) == 'table' then
-      for _, s in ipairs(specs) do
-        if type(s) == 'string' then M.use(s) else M.use(s[1], s) end
+    if not ok then api.nvim_err_writeln('plg.nvim: error loading '..f..': '..specs)
+    elseif type(specs) == 'table' then for _, s in ipairs(specs) do
+        if type(s)=='string' then M.use(s)
+        else M.use(s[1], s) end
       end
     end
   end
 end
 
--- Public interface: sync plugins
-function M.sync(specs_path)
-  load_specs(specs_path)
-  process_plugins()
+-- Async git command helper
+local function git_job(cmd, args, cwd, on_exit)
+  local stderr = uv.new_pipe(false)
+  uv.spawn(cmd, { args=args, stdio={nil, nil, stderr}, cwd=cwd }, function(code)
+    stderr:close()
+    if on_exit then schedule(function() on_exit(code==0) end) end
+  end)
 end
+
+-- Install missing plugins
+function M.sync(specs)
+  load_specs(specs)
+  local to_install = {}
+  for repo,_ in pairs(M._plugins) do
+    local name = repo:match('.*/(.*)')
+    local path = data_path..'/start/'..name
+    if fn.isdirectory(path)==0 then table.insert(to_install,{repo=repo,name=name,path=path}) end
+  end
+  if #to_install>0 then
+    notify('Installing plugins: '..table.concat(vim.tbl_map(function(p)return p.name end,to_install),', '), vim.log.levels.INFO)
+    for _,p in ipairs(to_install) do
+      git_job('git',{'clone','--depth','1','https://github.com/'..p.repo..'.git',p.path},nil,function(ok)
+        if ok then
+          vim.opt.rtp:append(p.path)
+          if type(M._plugins[p.repo].config)=='function' then schedule(function() pcall(M._plugins[p.repo].config) end) end
+        else notify('Failed to install '..p.name, vim.log.levels.ERROR) end
+      end)
+    end
+  end
+  -- Notify updates available
+  local outdated = {}
+  for repo,_ in pairs(M._plugins) do
+    local name=repo:match('.*/(.*)')
+    local path=data_path..'/start/'..name
+    if fn.isdirectory(path)==1 then
+      local local_sha = fn.systemlist({'git','-C',path,'rev-parse','HEAD'})[1]
+      local remote = fn.systemlist({'git','-C',path,'ls-remote','origin','HEAD'})[1]
+      local remote_sha = remote and remote:match('^([a-f0-9]+)')
+      if local_sha and remote_sha and local_sha~=remote_sha then table.insert(outdated,name) end
+    end
+  end
+  if #outdated>0 then
+    notify('Updates available for: '..table.concat(outdated,', '), vim.log.levels.WARN)
+  end
+end
+
+-- Update command: update selected plugins
+function M.update()
+  local list = {}
+  for repo,_ in pairs(M._plugins) do
+    local name=repo:match('.*/(.*)')
+    table.insert(list,name)
+  end
+  vim.ui.select(list,{prompt='Update plugin:'},function(choice)
+    if choice then
+      local path=data_path..'/start/'..choice
+      notify('Updating '..choice, vim.log.levels.INFO)
+      git_job('git',{'-C',path,'pull','--ff-only'},path,function(ok)
+        if ok then notify(choice..' updated',vim.log.levels.INFO)
+        else notify('Failed to update '..choice, vim.log.levels.ERROR) end
+      end)
+    end
+  end)
+end
+
+-- List command: show loaded plugins
+function M.list()
+  local buf=api.nvim_create_buf(false,true)
+  api.nvim_buf_set_lines(buf,0,-1,false,vim.tbl_map(function(r)
+    return '• '..r:match('.*/(.*)') end, vim.tbl_keys(M._plugins)))
+  api.nvim_open_win(buf,true,{relative='editor',width=30,height=math.min(10,#vim.tbl_keys(M._plugins)+2),row=5,col=5,style='minimal',border='rounded'})
+end
+
+-- Clean command: remove dirs not in specs
+function M.clean()
+  local dirs=fn.glob(data_path..'/start/*',true,true)
+  local known={}
+  for repo,_ in pairs(M._plugins) do known[repo:match('.*/(.*)')]=true end
+  for _,d in ipairs(dirs) do
+    local n=fn.fnamemodify(d,':t')
+    if not known[n] then
+      fn.delete(d,'rf')
+      notify('Removed '..n, vim.log.levels.INFO)
+    end
+  end
+end
+
+-- User commands
+api.nvim_create_user_command('PlgSync', function(opts) M.sync(opts.args) end, { nargs=1 })
+api.nvim_create_user_command('PlgUpdate', M.update, {})
+api.nvim_create_user_command('PlgList', M.list, {})
+api.nvim_create_user_command('PlgClean', M.clean, {})
+
+-- Boot + sync on startup
+bootstrap()
+schedule(function() M.sync(vim.fn.stdpath('config')..'/lua/plugins') end)
 
 return M
