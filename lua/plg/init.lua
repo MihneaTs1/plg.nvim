@@ -10,9 +10,5 @@ function M.setup(specs)
   setup_module.load()
 end
 
-vim.api.nvim_create_user_command("PlgInstall", M.install, {
-  desc = "Install plugins declared via require('plg').setup()"
-})
-
 return M
 
