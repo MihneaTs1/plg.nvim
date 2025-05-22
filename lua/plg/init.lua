@@ -1,35 +1,62 @@
 -- lua/plg/init.lua
 local M = {}
 
--- Start with plg.nvim itself
-M.plugins = { "MihneaTs1/plg.nvim" }
+-- start with plg.nvim itself
+M.plugins = {
+  {
+    plugin = "MihneaTs1/plg.nvim",
+  }
+}
 
---- Add a plugin (e.g. "user/repo")
----@param plugin string
-function M.use(plugin)
-  table.insert(M.plugins, plugin)
+--- Declare a plugin spec
+-- @param spec table { plugin = "user/repo", config = fn or nil, dependencies = { spec, ... } or nil }
+function M.use(spec)
+  assert(type(spec) == "table" and type(spec.plugin) == "string",
+         "plg.nvim `use` requires a table with a string `plugin` field")
+  table.insert(M.plugins, spec)
 end
 
---- Install any plugins in M.plugins that aren't already cloned
-function M.install()
+--- Internal installer, handles one spec (and its dependencies) exactly once
+local function install_one(spec, visited)
   local fn = vim.fn
-  local data_dir = fn.stdpath("data")
-  local pack_dir = data_dir .. "/site/pack/plg/start/"
+  local cmd = vim.cmd
 
-  for _, plugin in ipairs(M.plugins) do
-    -- derive folder name from "user/name"
-    local name = plugin:match("^.+/(.+)$")
-    local target = pack_dir .. name
+  -- extract repo name
+  local name = spec.plugin:match("^.+/(.+)$")
+  if visited[name] then return end
+  visited[name] = true
 
-    if fn.empty(fn.glob(target)) > 0 then
-      print("plg.nvim → installing " .. plugin)
-      fn.system({
-        "git", "clone", "--depth", "1",
-        "https://github.com/" .. plugin .. ".git",
-        target,
-      })
-      vim.cmd("packadd " .. name)
+  -- first install dependencies
+  if spec.dependencies then
+    for _, dep in ipairs(spec.dependencies) do
+      install_one(dep, visited)
     end
+  end
+
+  -- then plugin itself
+  local data_dir = fn.stdpath("data")
+  local target = data_dir .. "/site/pack/plg/start/" .. name
+  if fn.empty(fn.glob(target)) > 0 then
+    print("plg.nvim → installing " .. spec.plugin)
+    fn.system{
+      "git", "clone", "--depth", "1",
+      "https://github.com/" .. spec.plugin .. ".git",
+      target,
+    }
+    cmd("packadd " .. name)
+  end
+
+  -- finally run its config (now that it's loaded)
+  if type(spec.config) == "function" then
+    pcall(spec.config)
+  end
+end
+
+--- Install all declared plugins (recursively)
+function M.install()
+  local visited = {}
+  for _, spec in ipairs(M.plugins) do
+    install_one(spec, visited)
   end
 end
 
