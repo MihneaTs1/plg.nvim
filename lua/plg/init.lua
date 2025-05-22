@@ -1,7 +1,6 @@
 -- lua/plg/init.lua
 local fn  = vim.fn
 local cmd = vim.cmd
-local uv  = vim.loop
 
 local M = {}
 
@@ -10,80 +9,32 @@ M.plugins = {
   { plugin = "MihneaTs1/plg.nvim" }
 }
 
--- normalize a spec (string, array-shorthand, or full table) into a proper spec table
+-- normalize a spec (string or table) into a full spec table
 local function normalize_spec(spec)
   if type(spec) == "string" then
-    -- "user/repo"
     spec = { plugin = spec }
-
   elseif type(spec) == "table" then
-    -- array-shorthand: { "user/repo", lazy = true, … }
-    if spec.plugin == nil then
-      local shorthand = spec[1]
-      if type(shorthand) == "string" then
-        spec.plugin = shorthand
-        spec[1] = nil
-      else
-        error("plg.nvim.use spec tables require a `.plugin` field or [1] = plugin string")
-      end
-    end
-    assert(type(spec.plugin) == "string", "plg.nvim.use `plugin` must be a string")
-
-    -- recursively normalize dependencies
+    assert(type(spec.plugin) == "string",
+           "plg.nvim.use spec tables require a string `plugin` field")
     if spec.dependencies then
       for i, dep in ipairs(spec.dependencies) do
         spec.dependencies[i] = normalize_spec(dep)
       end
     end
-
   else
     error("plg.nvim.use received invalid spec type: " .. type(spec))
   end
-
   return spec
 end
 
---- Declare a plugin (string, shorthand array, or full spec table)
--- @param spec string|table
+--- Declare a plugin (string or full spec)
+-- @param spec string|"table"
 function M.use(spec)
   spec = normalize_spec(spec)
   table.insert(M.plugins, spec)
 end
 
---- Load plugin specs from a file or directory of files
--- Each file must `return { spec1, spec2, … }`
--- @param source string: path to a file or directory
-function M.setup(source)
-  local stat = assert(uv.fs_stat(source), "plg.nvim.setup: not found: " .. source)
-  if stat.type == "file" then
-    local specs = dofile(source)
-    assert(type(specs) == "table", "plg.nvim.setup: file must return a table")
-    for _, spec in ipairs(specs) do
-      M.use(spec)
-    end
-
-  elseif stat.type == "directory" then
-    local it = assert(uv.fs_scandir(source), "plg.nvim.setup: cannot scan " .. source)
-    while true do
-      local name, t = uv.fs_scandir_next(it)
-      if not name then break end
-      if t == "file" then
-        local path = source .. "/" .. name
-        local ok, specs = pcall(dofile, path)
-        if ok and type(specs) == "table" then
-          for _, spec in ipairs(specs) do
-            M.use(spec)
-          end
-        end
-      end
-    end
-
-  else
-    error("plg.nvim.setup: unsupported type: " .. stat.type)
-  end
-end
-
--- internal: topologically gather specs & their dependencies
+-- internal: topo-sort plugins + their deps
 local function gather(spec, seen, out)
   local name = spec.plugin:match("^.+/(.+)$")
   if seen[name] then return end
@@ -97,9 +48,6 @@ local function gather(spec, seen, out)
 end
 
 --- Install all declared plugins
--- • missing ones are cloned (batch for unpinned, individual for pinned)
--- • start-plugins are packadded + config deferred
--- • opt-plugins have lazy-load autocommands
 function M.install()
   local data_dir  = fn.stdpath("data")
   local start_dir = data_dir .. "/site/pack/plg/start/"
@@ -111,7 +59,7 @@ function M.install()
     gather(spec, seen, ordered)
   end
 
-  -- 2) Clone missing repos
+  -- 2) Clone missing repos (batch unversioned, individual pinned)
   local jobs, batch = {}, {}
   for _, item in ipairs(ordered) do
     local s, name = item.spec, item.name
@@ -135,8 +83,9 @@ function M.install()
     for _, e in ipairs(batch) do
       lines[#lines+1] = e.url .. " " .. e.tgt
     end
-    local list    = table.concat(lines, "\n")
-    local cmdline = "printf '" .. list .. "' | xargs -P4 -n2 sh -c 'git clone --depth=1 \"$0\" \"$1\"'"
+    local list = table.concat(lines, "\n")
+    local cmdline =
+      "printf '" .. list .. "' | xargs -P4 -n2 sh -c 'git clone --depth=1 \"$0\" \"$1\"'"
     table.insert(jobs, fn.jobstart({ "sh", "-c", cmdline }))
   end
 
@@ -144,7 +93,7 @@ function M.install()
     fn.jobwait(jobs, -1)
   end
 
-  -- 3) packadd + config (deferred for start-plugins; lazy hooks for opt-plugins)
+  -- 3) packadd + config (deferred for start-plugins; lazy-load for opt-plugins)
   for _, item in ipairs(ordered) do
     local s, name, tgt = item.spec, item.name, item.target
     if fn.isdirectory(tgt) == 1 then
@@ -154,9 +103,10 @@ function M.install()
           if type(s.config) == "function" then pcall(s.config) end
         end, 0)
       else
-        -- lazy: on Events
+        -- lazy: on events
         if s.event then
-          for _, ev in ipairs(type(s.event)=="table" and s.event or {s.event}) do
+          local evs = type(s.event) == "table" and s.event or { s.event }
+          for _, ev in ipairs(evs) do
             vim.api.nvim_create_autocmd(ev, {
               callback = function()
                 cmd("packadd " .. name)
@@ -167,21 +117,23 @@ function M.install()
             })
           end
         end
-        -- lazy: on Commands
+        -- lazy: on commands
         if s.cmd then
-          for _, c in ipairs(type(s.cmd)=="table" and s.cmd or {s.cmd}) do
+          local cmds = type(s.cmd) == "table" and s.cmd or { s.cmd }
+          for _, c in ipairs(cmds) do
             vim.api.nvim_create_user_command(c, function(opts)
               cmd("packadd " .. name)
               if type(s.config) == "function" then pcall(s.config) end
               vim.api.nvim_del_user_command(c)
               vim.api.nvim_exec(opts.args or "", false)
-            end, { nargs="*", bang=true })
+            end, { nargs = "*", bang = true })
           end
         end
         -- lazy: on FileType
         if s.ft then
+          local fts = type(s.ft) == "table" and s.ft or { s.ft }
           vim.api.nvim_create_autocmd("FileType", {
-            pattern = type(s.ft)=="table" and s.ft or {s.ft},
+            pattern = fts,
             callback = function()
               cmd("packadd " .. name)
               if type(s.config) == "function" then pcall(s.config) end
@@ -191,9 +143,29 @@ function M.install()
       end
     end
   end
+
+  -- 4) generate compiled one-shot loader for next startup
+  M.compile_loader(ordered)
 end
 
--- internal async finder: which plugins are behind their remotes
+--- Generate a one-shot `plugin/plg_compiled.lua` without logging
+function M.compile_loader(ordered)
+  local plugdir = fn.stdpath("data") .. "/site/pack/plg/start/plg.nvim/plugin"
+  fn.mkdir(plugdir, "p")
+  local lines = {
+    "-- Auto-generated by plg.nvim — do not edit",
+  }
+  for _, item in ipairs(ordered) do
+    if not item.spec.lazy then
+      lines[#lines+1] = ("vim.cmd('packadd %s')"):format(item.name)
+    end
+  end
+  local f = io.open(plugdir .. "/plg_compiled.lua", "w")
+  f:write(table.concat(lines, "\n"))
+  f:close()
+end
+
+-- async helper: find which are behind their remotes
 local function async_find_outdated(ordered, cb)
   local pending, out = #ordered, {}
   if pending == 0 then return cb(out) end
@@ -201,12 +173,12 @@ local function async_find_outdated(ordered, cb)
   for _, item in ipairs(ordered) do
     local tgt = fn.stdpath("data") .. "/site/pack/plg/start/" .. item.name
     if fn.isdirectory(tgt) == 1 then
-      local cmdstr = ("git -C %s fetch --quiet && git -C %s rev-list --count HEAD..@{u}")
-                     :format(tgt, tgt)
+      local cmdstr =
+        "git -C "..tgt.." fetch --quiet && git -C "..tgt.." rev-list --count HEAD..@{u}"
       fn.jobstart(cmdstr, {
         stdout_buffered = true,
-        on_stdout = function(_, data)
-          if tonumber(data[1]) and tonumber(data[1]) > 0 then
+        on_stdout = function(_, d)
+          if tonumber(d[1]) and tonumber(d[1]) > 0 then
             out[#out+1] = item
           end
         end,
@@ -225,18 +197,16 @@ end
 --- Update only the outdated (skip pinned), async so UI never blocks
 function M.update()
   local seen, ordered = {}, {}
-  for _, spec in ipairs(M.plugins) do
-    gather(spec, seen, ordered)
-  end
+  for _, s in ipairs(M.plugins) do gather(s, seen, ordered) end
 
   async_find_outdated(ordered, function(out)
     if #out == 0 then return end
     local jobs = {}
     for _, item in ipairs(out) do
       local s, name = item.spec, item.name
+      local tgt = fn.stdpath("data") .. "/site/pack/plg/start/" .. name
       if not s.version then
-        local tgt = fn.stdpath("data") .. "/site/pack/plg/start/" .. name
-        jobs[#jobs+1] = fn.jobstart({ "git", "-C", tgt, "pull", "--ff-only" })
+        table.insert(jobs, fn.jobstart({ "git", "-C", tgt, "pull", "--ff-only" }))
       end
     end
     if #jobs > 0 then fn.jobwait(jobs, -1) end
