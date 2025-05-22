@@ -28,6 +28,18 @@ function M.setup(specs)
   M._plugins = specs
 end
 
+function M.load()
+  for _, spec in ipairs(M._plugins) do
+    local name = spec.plugin:match("^.+/(.+)$")
+    -- first ensure it’s on runtimepath
+    vim.cmd("packadd " .. name)
+    -- then run user’s config()
+    if spec.config then
+      spec.config()
+    end
+  end
+end
+
 --- Other modules call this to get the list:
 function M.get_plugins()
   return M._plugins

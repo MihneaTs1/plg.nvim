@@ -6,14 +6,8 @@ local M = {}
 
 function M.setup(specs)
   setup_module.setup(specs)
-  -- you could even run loading/config here:
-  -- for _, spec in ipairs(specs) do
-  --   if spec.config then spec.config() end
-  -- end
-end
-
-function M.install()
   install_module.install()
+  setup_module.load()
 end
 
 vim.api.nvim_create_user_command("PlgInstall", M.install, {
