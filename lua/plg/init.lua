@@ -52,7 +52,7 @@ end
 
 --- Load plugin specs from a file or directory of files
 -- Each file must `return { spec1, spec2, … }`
--- @param source string: path to a file or folder
+-- @param source string: path to a file or directory
 function M.setup(source)
   local stat = assert(uv.fs_stat(source), "plg.nvim.setup: not found: " .. source)
   if stat.type == "file" then
@@ -135,7 +135,7 @@ function M.install()
     for _, e in ipairs(batch) do
       lines[#lines+1] = e.url .. " " .. e.tgt
     end
-    local list   = table.concat(lines, "\n")
+    local list    = table.concat(lines, "\n")
     local cmdline = "printf '" .. list .. "' | xargs -P4 -n2 sh -c 'git clone --depth=1 \"$0\" \"$1\"'"
     table.insert(jobs, fn.jobstart({ "sh", "-c", cmdline }))
   end
@@ -154,9 +154,9 @@ function M.install()
           if type(s.config) == "function" then pcall(s.config) end
         end, 0)
       else
-        -- lazy: On Events
+        -- lazy: on Events
         if s.event then
-          for _, ev in ipairs(type(s.event) == "table" and s.event or { s.event }) do
+          for _, ev in ipairs(type(s.event)=="table" and s.event or {s.event}) do
             vim.api.nvim_create_autocmd(ev, {
               callback = function()
                 cmd("packadd " .. name)
@@ -167,21 +167,21 @@ function M.install()
             })
           end
         end
-        -- lazy: On Commands
+        -- lazy: on Commands
         if s.cmd then
-          for _, c in ipairs(type(s.cmd) == "table" and s.cmd or { s.cmd }) do
+          for _, c in ipairs(type(s.cmd)=="table" and s.cmd or {s.cmd}) do
             vim.api.nvim_create_user_command(c, function(opts)
               cmd("packadd " .. name)
               if type(s.config) == "function" then pcall(s.config) end
               vim.api.nvim_del_user_command(c)
               vim.api.nvim_exec(opts.args or "", false)
-            end, { nargs = "*", bang = true })
+            end, { nargs="*", bang=true })
           end
         end
-        -- lazy: On FileType
+        -- lazy: on FileType
         if s.ft then
           vim.api.nvim_create_autocmd("FileType", {
-            pattern = type(s.ft) == "table" and s.ft or { s.ft },
+            pattern = type(s.ft)=="table" and s.ft or {s.ft},
             callback = function()
               cmd("packadd " .. name)
               if type(s.config) == "function" then pcall(s.config) end
