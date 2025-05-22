@@ -68,24 +68,3 @@ function M.install(on_complete)
 end
 
 return M
-
-
--- File: lua/plg/init.lua
-local setup_mod   = require("plg.core.setup")
-local install_mod = require("plg.core.install")
-
-local M = {}
-
----
--- One-shot setup: record specs, clone missing plugins async, then load configs.
--- @param specs table list of plugin specs
----
-function M.setup(specs)
-  setup_mod.setup(specs)
-  install_mod.install(function()
-    setup_mod.load()
-  end)
-end
-
-return M
-
