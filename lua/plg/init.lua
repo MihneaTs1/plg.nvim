@@ -3,9 +3,7 @@ local M = {}
 
 -- start with plg.nvim itself
 M.plugins = {
-  {
-    plugin = "MihneaTs1/plg.nvim",
-  }
+  { plugin = "MihneaTs1/plg.nvim" }
 }
 
 --- Declare a plugin spec
@@ -16,47 +14,59 @@ function M.use(spec)
   table.insert(M.plugins, spec)
 end
 
---- Internal installer, handles one spec (and its dependencies) exactly once
-local function install_one(spec, visited)
-  local fn = vim.fn
+--- Install all declared plugins, cloning missing ones in parallel
+function M.install()
+  local fn  = vim.fn
   local cmd = vim.cmd
+  local data_dir = fn.stdpath("data")
+  local pack_dir = data_dir .. "/site/pack/plg/start/"
 
-  -- extract repo name
-  local name = spec.plugin:match("^.+/(.+)$")
-  if visited[name] then return end
-  visited[name] = true
+  -- 1) Topologically sort all specs (deps first)
+  local visited = {}
+  local ordered = {}
+  local function gather(spec)
+    local name = spec.plugin:match("^.+/(.+)$")
+    if visited[name] then return end
+    visited[name] = true
+    if spec.dependencies then
+      for _, dep in ipairs(spec.dependencies) do
+        gather(dep)
+      end
+    end
+    table.insert(ordered, { spec = spec, name = name })
+  end
+  for _, spec in ipairs(M.plugins) do
+    gather(spec)
+  end
 
-  -- first install dependencies
-  if spec.dependencies then
-    for _, dep in ipairs(spec.dependencies) do
-      install_one(dep, visited)
+  -- 2) Launch git‐clone jobs for every missing repo
+  local jobs = {}
+  for _, item in ipairs(ordered) do
+    item.target = pack_dir .. item.name
+    if fn.empty(fn.glob(item.target)) > 0 then
+      print("plg.nvim → cloning " .. item.spec.plugin)
+      local cmd_args = {
+        "git", "clone", "--depth", "1",
+        "https://github.com/" .. item.spec.plugin .. ".git",
+        item.target,
+      }
+      table.insert(jobs, fn.jobstart(cmd_args))
     end
   end
 
-  -- then plugin itself
-  local data_dir = fn.stdpath("data")
-  local target = data_dir .. "/site/pack/plg/start/" .. name
-  if fn.empty(fn.glob(target)) > 0 then
-    print("plg.nvim → installing " .. spec.plugin)
-    fn.system{
-      "git", "clone", "--depth", "1",
-      "https://github.com/" .. spec.plugin .. ".git",
-      target,
-    }
-    cmd("packadd " .. name)
+  -- 3) Wait for all clones to finish
+  if #jobs > 0 then
+    fn.jobwait(jobs, -1)
   end
 
-  -- finally run its config (now that it's loaded)
-  if type(spec.config) == "function" then
-    pcall(spec.config)
-  end
-end
-
---- Install all declared plugins (recursively)
-function M.install()
-  local visited = {}
-  for _, spec in ipairs(M.plugins) do
-    install_one(spec, visited)
+  -- 4) packadd & config in dependency order
+  for _, item in ipairs(ordered) do
+    if fn.isdirectory(item.target) == 1 then
+      cmd("packadd " .. item.name)
+      if type(item.spec.config) == "function" then
+        pcall(item.spec.config)
+      end
+    end
   end
 end
 
