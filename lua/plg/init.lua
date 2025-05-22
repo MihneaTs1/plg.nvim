@@ -10,7 +10,7 @@ M.plugins = {
   { plugin = "MihneaTs1/plg.nvim" }
 }
 
--- normalize a user‐provided spec (string or table) into a full spec table
+-- normalize a spec (string or table) into a full spec table
 local function normalize_spec(spec)
   if type(spec) == "string" then
     spec = { plugin = spec }
@@ -71,25 +71,27 @@ function M.install()
       local url = "https://github.com/" .. s.plugin .. ".git"
       if s.version then
         local args = { "git", "clone", "--depth", "1", "--branch", s.version, url, target }
-        print(("plg.nvim → cloning %s@%s"):format(s.plugin, s.version))
         jobs[#jobs+1] = fn.jobstart(args)
       else
         batch[#batch+1] = { url = url, tgt = target }
       end
     end
   end
+
   if #batch > 0 then
     local lines = {}
     for _, e in ipairs(batch) do
       lines[#lines+1] = e.url .. " " .. e.tgt
     end
     local list = table.concat(lines, "\n")
-    local cmdline = 
+    local cmdline =
       "printf '" .. list .. "' | xargs -P4 -n2 sh -c 'git clone --depth=1 \"$0\" \"$1\"'"
-    print("plg.nvim → batching clone of unpinned plugins")
     jobs[#jobs+1] = fn.jobstart({ "sh", "-c", cmdline })
   end
-  if #jobs > 0 then fn.jobwait(jobs, -1) end
+
+  if #jobs > 0 then
+    fn.jobwait(jobs, -1)
+  end
 
   -- 3) packadd + config (deferred for start-plugins; lazy‐load setup for opt-plugins)
   for _, item in ipairs(ordered) do
@@ -184,12 +186,12 @@ local function async_find_outdated(ordered, cb)
   for _, item in ipairs(ordered) do
     local tgt = fn.stdpath("data").."/site/pack/plg/start/"..item.name
     if fn.isdirectory(tgt) == 1 then
-      local cmdstr = 
+      local cmdstr =
         "git -C "..tgt.." fetch --quiet && git -C "..tgt.." rev-list --count HEAD..@{u}"
       fn.jobstart(cmdstr, {
         stdout_buffered = true,
-        on_stdout = function(_,d)
-          if tonumber(d[1]) and tonumber(d[1])>0 then
+        on_stdout = function(_, d)
+          if tonumber(d[1]) and tonumber(d[1]) > 0 then
             out[#out+1] = item
           end
         end,
@@ -211,23 +213,16 @@ function M.update()
   for _, s in ipairs(M.plugins) do gather(s, seen, ordered) end
 
   async_find_outdated(ordered, function(out)
-    if #out == 0 then
-      print("plg.nvim → all plugins up-to-date")
-      return
-    end
+    if #out == 0 then return end
     local jobs = {}
     for _, item in ipairs(out) do
       local s, name = item.spec, item.name
       local tgt = fn.stdpath("data").."/site/pack/plg/start/"..name
-      if s.version then
-        print(("plg.nvim → pinned %s@%s → skipping update")
-              :format(s.plugin, s.version))
-      else
-        print("plg.nvim → updating "..s.plugin)
+      if not s.version then
         jobs[#jobs+1] = fn.jobstart({ "git", "-C", tgt, "pull", "--ff-only" })
       end
     end
-    if #jobs > 0 then fn.jobwait(jobs, -1); print("plg.nvim → updates complete") end
+    if #jobs > 0 then fn.jobwait(jobs, -1) end
   end)
 end
 
