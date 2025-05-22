@@ -1,123 +1,137 @@
 -- lua/plg/init.lua
 local M = {}
 
--- 1) initial list contains plg.nvim itself
+-- initial list: plg.nvim itself
 M.plugins = {
   { plugin = "MihneaTs1/plg.nvim" }
 }
 
 --- Declare a plugin spec
--- @param spec table { plugin = "user/repo", config = fn or nil, dependencies = { spec, ... } }
+-- @param spec { plugin= "user/repo", config=fn?, dependencies={...}? }
 function M.use(spec)
-  assert(type(spec) == "table" and type(spec.plugin) == "string",
-         "plg.nvim `use` requires a table with a string `plugin` field")
+  assert(type(spec)=="table" and type(spec.plugin)=="string",
+         "plg.nvim.use needs a table with a string `plugin` field")
   table.insert(M.plugins, spec)
 end
 
--- internal: gather specs in dependency order
-local function gather(spec, visited, ordered)
+-- internal: gather in topological order
+local function gather(spec, seen, out)
   local name = spec.plugin:match("^.+/(.+)$")
-  if visited[name] then return end
-  visited[name] = true
+  if seen[name] then return end
+  seen[name] = true
   if spec.dependencies then
     for _, dep in ipairs(spec.dependencies) do
-      gather(dep, visited, ordered)
+      gather(dep, seen, out)
     end
   end
-  table.insert(ordered, { spec = spec, name = name })
+  table.insert(out, { spec=spec, name=name })
 end
 
---- Install all declared plugins (missing ones in parallel), then packadd+config
+--- Install missing plugins in parallel, then packadd+config
 function M.install()
   local fn      = vim.fn
   local cmd     = vim.cmd
-  local packdir = fn.stdpath("data") .. "/site/pack/plg/start/"
+  local packdir = fn.stdpath("data").."/site/pack/plg/start/"
 
-  -- 1) topologically sort
-  local visited, ordered = {}, {}
+  -- 1) topo sort
+  local seen, ordered = {}, {}
   for _, spec in ipairs(M.plugins) do
-    gather(spec, visited, ordered)
+    gather(spec, seen, ordered)
   end
 
-  -- 2) parallel git-clone for missing
+  -- 2) parallel git clone
   local jobs = {}
   for _, item in ipairs(ordered) do
-    local target = packdir .. item.name
-    if fn.empty(fn.glob(target)) > 0 then
-      print("plg.nvim → cloning " .. item.spec.plugin)
-      local args = {
-        "git", "clone", "--depth", "1",
-        "https://github.com/" .. item.spec.plugin .. ".git",
-        target,
-      }
-      table.insert(jobs, fn.jobstart(args))
-    end
+    local target = packdir..item.name
     item.target = target
+    if fn.empty(fn.glob(target))>0 then
+      print("plg.nvim → cloning "..item.spec.plugin)
+      jobs[#jobs+1] = fn.jobstart({
+        "git","clone","--depth","1",
+        "https://github.com/"..item.spec.plugin..".git",
+        target,
+      })
+    end
   end
-  if #jobs > 0 then
-    fn.jobwait(jobs, -1)
-  end
+  if #jobs>0 then fn.jobwait(jobs, -1) end
 
-  -- 3) load & config
+  -- 3) packadd + config()
   for _, item in ipairs(ordered) do
-    if fn.isdirectory(item.target) == 1 then
-      cmd("packadd " .. item.name)
-      if type(item.spec.config) == "function" then
+    if fn.isdirectory(item.target)==1 then
+      cmd("packadd "..item.name)
+      if type(item.spec.config)=="function" then
         pcall(item.spec.config)
       end
     end
   end
 end
 
---- Check which installed plugins are behind their remotes
--- @return list of { name = <repo-name>, behind = <commit-count> }
-function M.check_updates()
+-- internal: async check which of `ordered` are behind
+local function async_find_outdated(ordered, on_done)
   local fn      = vim.fn
-  local packdir = fn.stdpath("data") .. "/site/pack/plg/start/"
+  local total   = #ordered
+  if total==0 then return on_done({}) end
+  local pending = total
   local outdated = {}
 
-  for _, spec in ipairs(M.plugins) do
-    local name   = spec.plugin:match("^.+/(.+)$")
-    local target = packdir .. name
-    if fn.isdirectory(target) == 1 then
-      -- fetch remote
-      fn.system({ "git", "-C", target, "fetch", "--quiet" })
-      -- count commits ahead of us
-      local cnt = tonumber(fn.system({
-        "git", "-C", target, "rev-list", "--count", "HEAD..@{u}"
-      })) or 0
-      if cnt > 0 then
-        table.insert(outdated, { name = name, behind = cnt })
-      end
+  for _, item in ipairs(ordered) do
+    local t = item
+    local target = fn.stdpath("data").."/site/pack/plg/start/"..t.name
+    if fn.isdirectory(target)==1 then
+      -- fetch & count behind
+      local cmd = "git -C "..target.." fetch --quiet && " ..
+                  "git -C "..target.." rev-list --count HEAD..@{u}"
+      fn.jobstart(cmd, {
+        stdout_buffered = true,
+        on_stdout = function(_, data)
+          local n = tonumber(data[1]) or 0
+          if n>0 then
+            t.target = target
+            table.insert(outdated, t)
+          end
+        end,
+        on_exit = function()
+          pending = pending - 1
+          if pending==0 then on_done(outdated) end
+        end,
+      })
+    else
+      pending = pending - 1
+      if pending==0 then on_done(outdated) end
     end
   end
-
-  return outdated
 end
 
---- Pull updates for all installed plugins in parallel
+--- Async‐only‐outdated update
+-- kicks off the check & pull in the background
 function M.update()
   local fn      = vim.fn
-  local packdir = fn.stdpath("data") .. "/site/pack/plg/start/"
-  local jobs    = {}
+  local packdir = fn.stdpath("data").."/site/pack/plg/start/"
 
+  -- gather in topo order
+  local seen, ordered = {}, {}
   for _, spec in ipairs(M.plugins) do
-    local name   = spec.plugin:match("^.+/(.+)$")
-    local target = packdir .. name
-    if fn.isdirectory(target) == 1 then
-      print("plg.nvim → updating " .. spec.plugin)
-      table.insert(jobs, fn.jobstart({
-        "git", "-C", target, "pull", "--ff-only"
-      }))
-    end
+    gather(spec, seen, ordered)
   end
 
-  if #jobs > 0 then
-    fn.jobwait(jobs, -1)
-    print("plg.nvim → all updates complete")
-  else
-    print("plg.nvim → no updates found")
-  end
+  -- non-blocking: find outdated, then pull only those
+  async_find_outdated(ordered, function(outdated)
+    if #outdated==0 then
+      print("plg.nvim → all plugins up-to-date")
+      return
+    end
+    local jobs = {}
+    for _, item in ipairs(outdated) do
+      print("plg.nvim → updating "..item.spec.plugin)
+      jobs[#jobs+1] = fn.jobstart({
+        "git","-C",item.target,"pull","--ff-only"
+      })
+    end
+    if #jobs>0 then
+      fn.jobwait(jobs, -1)
+      print("plg.nvim → updates complete")
+    end
+  end)
 end
 
 return M
