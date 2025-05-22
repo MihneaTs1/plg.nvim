@@ -63,10 +63,10 @@ function M.install()
       table.insert(args, "https://github.com/" .. spec.plugin .. ".git")
       table.insert(args, target)
 
-      print(("plg.nvim → cloning %s%s"):format(
-        spec.plugin,
-        spec.version and "@" .. spec.version or ""
-      ))
+      -- print(("plg.nvim → cloning %s%s"):format(
+      --  spec.plugin,
+      --  spec.version and "@" .. spec.version or ""
+      -- ))
       jobs[#jobs + 1] = fn.jobstart(args)
     end
   end
@@ -139,7 +139,7 @@ function M.update()
   -- async find outdated, then pull only unpinned ones
   async_find_outdated(ordered, function(outdated)
     if #outdated == 0 then
-      print("plg.nvim → all plugins up-to-date")
+      -- print("plg.nvim → all plugins up-to-date")
       return
     end
 
