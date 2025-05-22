@@ -117,7 +117,7 @@ function M.update()
   -- non-blocking: find outdated, then pull only those
   async_find_outdated(ordered, function(outdated)
     if #outdated==0 then
-      print("plg.nvim → all plugins up-to-date")
+      -- print("plg.nvim → all plugins up-to-date")
       return
     end
     local jobs = {}
