@@ -1,5 +1,4 @@
 -- lua/plg/init.lua
--- test
 local M = {}
 
 -- initial list: plg.nvim itself
