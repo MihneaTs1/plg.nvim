@@ -1,42 +1,36 @@
--- lua/plg.lua (this lives in the root of your plg.nvim repo under `lua/plg.lua`)
-local fn = vim.fn
+-- lua/plg/init.lua
 local M = {}
-local pending = {}
 
--- add to install queue
-function M.use(repo)
-  table.insert(pending, repo)
+-- Start with plg.nvim itself
+M.plugins = { "MihneaTs1/plg.nvim" }
+
+--- Add a plugin (e.g. "user/repo")
+---@param plugin string
+function M.use(plugin)
+  table.insert(M.plugins, plugin)
 end
 
--- clone any new plugins, then clear queue
+--- Install any plugins in M.plugins that aren't already cloned
 function M.install()
-  local data = fn.stdpath('data')
-  for _, repo in ipairs(pending) do
-    local name = repo:match('/([^/]+)$')
-    local dest = data..'/site/pack/plg/start/'..name
-    if fn.empty(fn.glob(dest)) > 0 then
-      fn.system { 'git', 'clone', '--depth', '1',
-        'https://github.com/'..repo, dest }
+  local fn = vim.fn
+  local data_dir = fn.stdpath("data")
+  local pack_dir = data_dir .. "/site/pack/plg/start/"
+
+  for _, plugin in ipairs(M.plugins) do
+    -- derive folder name from "user/name"
+    local name = plugin:match("^.+/(.+)$")
+    local target = pack_dir .. name
+
+    if fn.empty(fn.glob(target)) > 0 then
+      print("plg.nvim → installing " .. plugin)
+      fn.system({
+        "git", "clone", "--depth", "1",
+        "https://github.com/" .. plugin .. ".git",
+        target,
+      })
+      vim.cmd("packadd " .. name)
     end
   end
-  pending = {}
-end
-
--- pull latest for each installed plugin (silent)
-function M.update()
-  local data = fn.stdpath('data')
-  local dir = data..'/site/pack/plg/start'
-  for _, d in ipairs(fn.glob(dir..'/*', true, true)) do
-    if fn.isdirectory(d) == 1 then
-      fn.system { 'git', '-C', d, 'pull', '--ff-only' }
-    end
-  end
-end
-
--- update the manager itself
-function M.upgrade()
-  local mgr = fn.stdpath('config')..'/autoload/plg.nvim'
-  fn.system { 'git', '-C', mgr, 'pull', '--ff-only' }
 end
 
 return M
